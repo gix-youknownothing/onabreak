@@ -3,6 +3,7 @@ name = "onabreak"
 version = "0.1.0"
 description = "Cross-platform AI Agent Chat Client"
 authors = ["you"]
+license = "MIT"
 edition = "2021"
 
 [build-dependencies]

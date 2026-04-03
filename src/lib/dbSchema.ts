@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   provider_id TEXT NOT NULL DEFAULT 'claude-cli',
   provider_config TEXT NOT NULL DEFAULT '{}',
   cli_session_id TEXT,
+  sort_order INTEGER,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
@@ -51,4 +52,32 @@ export async function initDatabaseSchema(db: Database): Promise<void> {
   await db.execute(CREATE_SESSIONS);
   await db.execute(CREATE_CUSTOM_PROVIDERS);
   await db.execute(CREATE_SETTINGS);
+
+  const sessionColumns = await db.select<{ name: string }[]>("PRAGMA table_info(sessions)");
+  const hasSessionSortOrder = sessionColumns.some((column) => column.name === "sort_order");
+  if (!hasSessionSortOrder) {
+    await db.execute("ALTER TABLE sessions ADD COLUMN sort_order INTEGER");
+  }
+
+  const sessionsMissingSortOrder = await db.select<
+    { id: number; workspace_id: number; sort_order: number | null }[]
+  >(
+    `SELECT id, workspace_id, sort_order
+     FROM sessions
+     ORDER BY workspace_id ASC, created_at ASC, id ASC`,
+  );
+
+  const nextSortOrderByWorkspace = new Map<number, number>();
+  for (const session of sessionsMissingSortOrder) {
+    const nextSortOrder = nextSortOrderByWorkspace.get(session.workspace_id) ?? 0;
+    if (session.sort_order === null) {
+      await db.execute("UPDATE sessions SET sort_order = ? WHERE id = ?", [nextSortOrder, session.id]);
+      nextSortOrderByWorkspace.set(session.workspace_id, nextSortOrder + 1);
+      continue;
+    }
+    nextSortOrderByWorkspace.set(
+      session.workspace_id,
+      Math.max(nextSortOrder, session.sort_order + 1),
+    );
+  }
 }

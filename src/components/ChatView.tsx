@@ -1,6 +1,18 @@
 import { useState, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
-import { useChatStore, SessionStatus } from "../stores/chatStore";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useChatStore, Session, SessionStatus } from "../stores/chatStore";
 import { providerRegistry } from "../lib/providerRegistry";
 import SessionView from "./SessionView";
 import ProviderIcon from "./ProviderIcon";
@@ -50,6 +62,119 @@ interface ChatViewProps {
   onNavigateToSettings: () => void;
 }
 
+interface SortableSessionTabProps {
+  session: Session;
+  isActive: boolean;
+  isRenaming: boolean;
+  status?: SessionStatus;
+  unreadCount: number;
+  sessionsCount: number;
+  renamingTabName: string;
+  tabInputRef: React.RefObject<HTMLInputElement>;
+  onSelect: (session: Session) => void;
+  onStartRenaming: (e: React.MouseEvent, sessionId: number, name: string) => void;
+  onDelete: (e: React.MouseEvent, sessionId: number) => void;
+  onRenameChange: (value: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+}
+
+function SessionTabVisual({
+  session,
+  isActive,
+  isRenaming,
+  isDragging = false,
+  status,
+  unreadCount,
+  sessionsCount,
+  renamingTabName,
+  tabInputRef,
+  onSelect,
+  onStartRenaming,
+  onDelete,
+  onRenameChange,
+  onCommitRename,
+  onCancelRename,
+}: SortableSessionTabProps & { isDragging?: boolean }) {
+  return (
+    <div
+      className={`group flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-lg whitespace-nowrap min-w-[120px] max-w-[200px] select-none shrink-0 transition-[background-color,color,box-shadow,opacity] duration-150 ${
+        isActive
+          ? "bg-macos-card text-macos-text shadow-macos-sm"
+          : "text-macos-tertiary hover:text-macos-secondary hover:bg-macos-card/50"
+      } ${
+        isDragging
+          ? "cursor-grabbing shadow-macos-sm ring-1 ring-white/10"
+          : isRenaming
+            ? "cursor-text"
+            : "cursor-grab active:cursor-grabbing"
+      }`}
+      onClick={() => onSelect(session)}
+      onDoubleClick={(e) => onStartRenaming(e, session.id, session.name)}
+    >
+      <ProviderIcon providerId={session.provider_id} size="xs" />
+      <TabSessionIndicators status={status} unreadCount={unreadCount} />
+      {isRenaming ? (
+        <input
+          ref={tabInputRef}
+          value={renamingTabName}
+          onChange={(e) => onRenameChange(e.target.value)}
+          onBlur={onCommitRename}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onCommitRename();
+            if (e.key === "Escape") onCancelRename();
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="bg-macos-card text-macos-text border border-macos-blue rounded-lg px-1.5 py-0 text-[12px] outline-none w-20"
+        />
+      ) : (
+        <span className="truncate min-w-0">{session.name}</span>
+      )}
+      {sessionsCount > 1 && !isRenaming && (
+        <button
+          className="opacity-0 group-hover:opacity-100 ml-0.5 w-4 h-4 flex items-center justify-center rounded text-macos-tertiary hover:text-macos-red hover:bg-macos-red/10 transition-all"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => onDelete(e, session.id)}
+          title="close session"
+        >
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SortableSessionTab(props: SortableSessionTabProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: props.session.id,
+    disabled: props.isRenaming,
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.18 : 1,
+    zIndex: isDragging ? 10 : "auto",
+    willChange: "transform",
+    touchAction: props.isRenaming ? "auto" : "none",
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} className="shrink-0" {...attributes} {...listeners}>
+      <SessionTabVisual {...props} isDragging={false} />
+    </div>
+  );
+}
+
 const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ onNavigateToSettings }, ref) {
   const {
     currentWorkspace,
@@ -61,13 +186,21 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
     createSession,
     deleteSession,
     renameSession,
+    reorderSessions,
   } = useChatStore();
 
   const [renamingTabId, setRenamingTabId] = useState<number | null>(null);
   const [renamingTabName, setRenamingTabName] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [draggingTabId, setDraggingTabId] = useState<number | null>(null);
   const tabInputRef = useRef<HTMLInputElement>(null);
   const addBtnRef = useRef<HTMLDivElement>(null);
+  const suppressTabClickRef = useRef(false);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 0 },
+    }),
+  );
 
   const handleCreateSessionWithDefault = useCallback(() => {
     if (!currentWorkspace || sessions.length >= 10) return;
@@ -190,6 +323,48 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
     setRenamingTabName("");
   };
 
+  const cancelTabRename = useCallback(() => {
+    setRenamingTabId(null);
+    setRenamingTabName("");
+  }, []);
+
+  const handleSelectSession = useCallback((session: Session) => {
+    if (suppressTabClickRef.current) return;
+    selectSession(session);
+  }, [selectSession]);
+
+  const handleTabDragStart = useCallback((event: DragStartEvent) => {
+    setDraggingTabId(Number(event.active.id));
+    suppressTabClickRef.current = true;
+  }, []);
+
+  const handleTabDragEnd = useCallback((event: DragEndEvent) => {
+    setDraggingTabId(null);
+    const { active, over } = event;
+    window.setTimeout(() => {
+      suppressTabClickRef.current = false;
+    }, 0);
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = sessions.findIndex((session) => session.id === active.id);
+    const newIndex = sessions.findIndex((session) => session.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    const reordered = arrayMove(sessions, oldIndex, newIndex).map((session) => session.id);
+    reorderSessions(reordered);
+  }, [sessions, reorderSessions]);
+
+  const handleTabDragCancel = useCallback(() => {
+    setDraggingTabId(null);
+    window.setTimeout(() => {
+      suppressTabClickRef.current = false;
+    }, 0);
+  }, []);
+
+  const draggingSession = draggingTabId === null
+    ? null
+    : sessions.find((session) => session.id === draggingTabId) ?? null;
+
   if (!currentWorkspace) return null;
 
   return (
@@ -209,58 +384,66 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
             </svg>
             <span>笔记</span>
           </div>
-          {sessions.map((session) => {
-            const isActive = currentSession?.id === session.id;
-            const status = sessionStatuses[session.id];
-            const tabUnreadCount = unreadSessionCounts[session.id] ?? 0;
-            const isRenaming = renamingTabId === session.id;
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleTabDragStart}
+            onDragEnd={handleTabDragEnd}
+            onDragCancel={handleTabDragCancel}
+          >
+            <SortableContext items={sessions.map((session) => session.id)} strategy={horizontalListSortingStrategy}>
+              {sessions.map((session) => {
+                const isActive = currentSession?.id === session.id;
+                const status = sessionStatuses[session.id];
+                const tabUnreadCount = unreadSessionCounts[session.id] ?? 0;
+                const isRenaming = renamingTabId === session.id;
 
-            return (
-              <div
-                key={session.id}
-                className={`group flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-lg cursor-pointer transition-all whitespace-nowrap min-w-[120px] max-w-[200px] ${
-                  isActive
-                    ? "bg-macos-card text-macos-text shadow-macos-sm"
-                    : "text-macos-tertiary hover:text-macos-secondary hover:bg-macos-card/50"
-                }`}
-                onClick={() => selectSession(session)}
-                onDoubleClick={(e) => startRenamingTab(e, session.id, session.name)}
-              >
-                <ProviderIcon providerId={session.provider_id} size="xs" />
-                <TabSessionIndicators status={status} unreadCount={tabUnreadCount} />
-                {isRenaming ? (
-                  <input
-                    ref={tabInputRef}
-                    value={renamingTabName}
-                    onChange={(e) => setRenamingTabName(e.target.value)}
-                    onBlur={commitTabRename}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitTabRename();
-                      if (e.key === "Escape") {
-                        setRenamingTabId(null);
-                        setRenamingTabName("");
-                      }
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    className="bg-macos-card text-macos-text border border-macos-blue rounded-lg px-1.5 py-0 text-[12px] outline-none w-20"
+                return (
+                  <SortableSessionTab
+                    key={session.id}
+                    session={session}
+                    isActive={isActive}
+                    isRenaming={isRenaming}
+                    status={status}
+                    unreadCount={tabUnreadCount}
+                    sessionsCount={sessions.length}
+                    renamingTabName={renamingTabName}
+                    tabInputRef={tabInputRef}
+                    onSelect={handleSelectSession}
+                    onStartRenaming={startRenamingTab}
+                    onDelete={handleDeleteSessionTab}
+                    onRenameChange={setRenamingTabName}
+                    onCommitRename={commitTabRename}
+                    onCancelRename={cancelTabRename}
                   />
-                ) : (
-                  <span className="truncate min-w-0">{session.name}</span>
-                )}
-                {sessions.length > 1 && !isRenaming && (
-                  <button
-                    className="opacity-0 group-hover:opacity-100 ml-0.5 w-4 h-4 flex items-center justify-center rounded text-macos-tertiary hover:text-macos-red hover:bg-macos-red/10 transition-all"
-                    onClick={(e) => handleDeleteSessionTab(e, session.id)}
-                    title="close session"
-                  >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-            );
-          })}
+                );
+              })}
+            </SortableContext>
+            {createPortal(
+              <DragOverlay dropAnimation={null}>
+                {draggingSession ? (
+                  <SessionTabVisual
+                    session={draggingSession}
+                    isActive={currentSession?.id === draggingSession.id}
+                    isRenaming={false}
+                    isDragging
+                    status={sessionStatuses[draggingSession.id]}
+                    unreadCount={unreadSessionCounts[draggingSession.id] ?? 0}
+                    sessionsCount={sessions.length}
+                    renamingTabName=""
+                    tabInputRef={tabInputRef}
+                    onSelect={handleSelectSession}
+                    onStartRenaming={startRenamingTab}
+                    onDelete={handleDeleteSessionTab}
+                    onRenameChange={setRenamingTabName}
+                    onCommitRename={commitTabRename}
+                    onCancelRename={cancelTabRename}
+                  />
+                ) : null}
+              </DragOverlay>,
+              document.body
+            )}
+          </DndContext>
 
           <div ref={addBtnRef} className="relative flex items-center flex-shrink-0">
             <button

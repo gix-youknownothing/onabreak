@@ -26,7 +26,6 @@ export interface Session {
   updated_at: string;
   type?: string;
   agent?: string;
-  notes: string;
 }
 
 export type SessionStatus = "idle" | "streaming" | "exited";
@@ -60,7 +59,6 @@ interface ChatState {
   clearCliSession: (sessionId: number) => Promise<void>;
 
   updateWorkspaceNotes: (id: number, notes: string) => Promise<void>;
-  updateSessionNotes: (sessionId: number, notes: string) => Promise<void>;
 
   setSessionStatus: (sessionId: number, status: SessionStatus) => void;
 
@@ -281,7 +279,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       const sessions = await db.select<Session[]>(
-        `SELECT id, workspace_id, name, type, agent, provider_id, provider_config, cli_session_id, created_at, updated_at, COALESCE(notes, '') as notes
+        `SELECT id, workspace_id, name, type, agent, provider_id, provider_config, cli_session_id, created_at, updated_at
          FROM sessions WHERE workspace_id = ? ORDER BY created_at ASC`,
         [workspaceId],
       );
@@ -442,28 +440,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }));
     } catch (error) {
       console.error("Failed to update workspace notes:", error);
-    }
-  },
-
-  updateSessionNotes: async (sessionId: number, notes: string) => {
-    const { db, currentSession } = get();
-    if (!db) return;
-
-    try {
-      await db.execute(
-        "UPDATE sessions SET notes = ?, updated_at = datetime('now') WHERE id = ?",
-        [notes, sessionId],
-      );
-      if (currentSession?.id === sessionId) {
-        set({ currentSession: { ...currentSession, notes } });
-      }
-      set((state) => ({
-        sessions: state.sessions.map((s) =>
-          s.id === sessionId ? { ...s, notes } : s,
-        ),
-      }));
-    } catch (error) {
-      console.error("Failed to update session notes:", error);
     }
   },
 

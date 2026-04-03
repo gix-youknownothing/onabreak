@@ -3,10 +3,9 @@ import { createPortal } from "react-dom";
 import { useChatStore, SessionStatus } from "../stores/chatStore";
 import { providerRegistry } from "../lib/providerRegistry";
 import SessionView from "./SessionView";
-import DashboardView from "./DashboardView";
 import ProviderIcon from "./ProviderIcon";
 import { ProviderPickerPortal } from "./ProviderPicker";
-import SessionNotePanel from "./SessionNotePanel";
+import WorkspaceNotesView from "./WorkspaceNotesView";
 
 function TabSessionIndicators({
   status,
@@ -77,7 +76,7 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
     createSession(`Session ${nextNum}`, defaultProvider.id);
   }, [currentWorkspace, sessions.length, createSession]);
 
-  const handleDashboardClick = useCallback(async () => {
+  const handleNotesClick = useCallback(async () => {
     useChatStore.setState({ currentSession: null });
     const { db, currentWorkspace } = useChatStore.getState();
     if (db && currentWorkspace) {
@@ -98,11 +97,10 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
     }
   }, []);
 
-  const isDashboardActive = currentSession === null;
+  const isNotesActive = currentSession === null;
 
   useImperativeHandle(ref, () => ({
     cycleTab(direction: 1 | -1) {
-      // Tab order: Dashboard(0), session[0](1), session[1](2), ...
       const totalTabs = sessions.length + 1;
       if (totalTabs <= 1) return;
       let currentIdx = 0;
@@ -112,15 +110,14 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
       }
       const next = (currentIdx + direction + totalTabs) % totalTabs;
       if (next === 0) {
-        handleDashboardClick();
+        handleNotesClick();
       } else {
         selectSession(sessions[next - 1]);
       }
     },
     jumpToTab(index: number) {
-      // index 0 = Dashboard, 1 = session[0], ...
       if (index === 0) {
-        handleDashboardClick();
+        handleNotesClick();
       } else if (index >= 1 && index <= sessions.length) {
         selectSession(sessions[index - 1]);
       }
@@ -128,7 +125,7 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
     createSession() {
       handleCreateSessionWithDefault();
     },
-  }), [sessions, currentSession, selectSession, handleCreateSessionWithDefault, handleDashboardClick]);
+  }), [sessions, currentSession, selectSession, handleCreateSessionWithDefault, handleNotesClick]);
 
   const handlePtyExit = useCallback((_sessionId: number, _exitCode: number) => {}, []);
 
@@ -156,14 +153,6 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
       }
     },
     [],
-  );
-
-  const handleSelectSessionFromDashboard = useCallback(
-    (sessionId: number) => {
-      const session = sessions.find((s) => s.id === sessionId);
-      if (session) selectSession(session);
-    },
-    [sessions, selectSession],
   );
 
   const handleCreateSessionWithProvider = useCallback(
@@ -205,23 +194,20 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
 
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
-      {/* Unified header: WS info + session tabs */}
       <div className="h-11 border-b border-macos-border bg-macos-sidebar/80 backdrop-blur-[40px] px-3 flex items-center gap-2 flex-shrink-0">
-        {/* Dashboard tab + Session tabs */}
         <div className="flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto overflow-y-hidden">
-          {/* Fixed Dashboard tab */}
           <div
             className={`flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-lg cursor-pointer transition-all whitespace-nowrap flex-shrink-0 ${
-              isDashboardActive
+              isNotesActive
                 ? "bg-macos-card text-macos-text shadow-macos-sm"
                 : "text-macos-tertiary hover:text-macos-secondary hover:bg-macos-card/50"
             }`}
-            onClick={handleDashboardClick}
+            onClick={handleNotesClick}
           >
             <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 12a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1v-7z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h8" />
             </svg>
-            <span>Dashboard</span>
+            <span>笔记</span>
           </div>
           {sessions.map((session) => {
             const isActive = currentSession?.id === session.id;
@@ -276,7 +262,6 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
             );
           })}
 
-          {/* Split button: + (default) and dropdown — inside scrollable area, after last tab */}
           <div ref={addBtnRef} className="relative flex items-center flex-shrink-0">
             <button
               className={`w-6 h-6 rounded-l-lg flex items-center justify-center transition-colors ${
@@ -319,22 +304,17 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
         )}
       </div>
 
-      {/* Active content area — no horizontal padding so session/terminal spans full width */}
       <div className="flex-1 flex flex-col min-h-0">
-      {isDashboardActive ? (
-        <DashboardView
-          workspace={currentWorkspace}
-          onSelectSession={handleSelectSessionFromDashboard}
-        />
+      {isNotesActive ? (
+        <WorkspaceNotesView workspace={currentWorkspace} />
       ) : currentSession ? (
-        <div className="flex-1 flex flex-col min-h-0 relative">
+        <div className="flex-1 flex flex-col min-h-0">
           <SessionView
             session={currentSession}
             workspace={currentWorkspace}
             onPtyExit={handlePtyExit}
             onCliSessionCreated={handleCliSessionCreated}
           />
-          <SessionNotePanel session={currentSession} />
         </div>
       ) : null}
       </div>

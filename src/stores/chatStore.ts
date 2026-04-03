@@ -22,6 +22,7 @@ export interface Session {
   provider_id: string;
   provider_config: string;
   cli_session_id: string | null;
+  sort_order: number | null;
   created_at: string;
   updated_at: string;
   type?: string;
@@ -56,6 +57,7 @@ interface ChatState {
   selectSession: (session: Session) => void;
   deleteSession: (sessionId: number) => Promise<void>;
   renameSession: (sessionId: number, newName: string) => Promise<void>;
+  reorderSessions: (orderedSessionIds: number[]) => Promise<void>;
   clearCliSession: (sessionId: number) => Promise<void>;
 
   updateWorkspaceNotes: (id: number, notes: string) => Promise<void>;
@@ -158,8 +160,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const { providerRegistry } = await import("../lib/providerRegistry");
       const defaultProvider = providerRegistry.getDefault();
       await db.execute(
-        "INSERT INTO sessions (workspace_id, name, type, agent, provider_id, provider_config) VALUES (?, ?, ?, ?, ?, ?)",
-        [wsId, "Session 1", "terminal", defaultProvider.id, defaultProvider.id, "{}"],
+        "INSERT INTO sessions (workspace_id, name, type, agent, provider_id, provider_config, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [wsId, "Session 1", "terminal", defaultProvider.id, defaultProvider.id, "{}", 0],
       );
 
       await get().loadWorkspaces();
@@ -279,8 +281,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       const sessions = await db.select<Session[]>(
-        `SELECT id, workspace_id, name, type, agent, provider_id, provider_config, cli_session_id, created_at, updated_at
-         FROM sessions WHERE workspace_id = ? ORDER BY created_at ASC`,
+        `SELECT id, workspace_id, name, type, agent, provider_id, provider_config, cli_session_id, sort_order, created_at, updated_at
+         FROM sessions
+         WHERE workspace_id = ?
+         ORDER BY sort_order IS NULL ASC, sort_order ASC, created_at ASC`,
         [workspaceId],
       );
       set({ sessions });
@@ -290,14 +294,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   createSession: async (name: string, providerId: string, providerConfig?: Record<string, any>) => {
-    const { db, currentWorkspace } = get();
+    const { db, currentWorkspace, sessions } = get();
     if (!db || !currentWorkspace) return;
 
     try {
       const configJson = JSON.stringify(providerConfig || {});
+      const nextSortOrder = sessions.reduce((maxOrder, session) => {
+        if (session.sort_order === null) return maxOrder;
+        return Math.max(maxOrder, session.sort_order);
+      }, -1) + 1;
       const result = await db.execute(
-        "INSERT INTO sessions (workspace_id, name, type, agent, provider_id, provider_config) VALUES (?, ?, ?, ?, ?, ?)",
-        [currentWorkspace.id, name, "terminal", providerId, providerId, configJson],
+        "INSERT INTO sessions (workspace_id, name, type, agent, provider_id, provider_config, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [currentWorkspace.id, name, "terminal", providerId, providerId, configJson, nextSortOrder],
       );
 
       await get().loadSessions(currentWorkspace.id);
@@ -396,6 +404,43 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     } catch (error) {
       console.error("Failed to rename session:", error);
+    }
+  },
+
+  reorderSessions: async (orderedSessionIds: number[]) => {
+    const { db, currentWorkspace, sessions, currentSession } = get();
+    if (!db || !currentWorkspace || orderedSessionIds.length !== sessions.length) return;
+
+    const sessionIdSet = new Set(sessions.map((session) => session.id));
+    if (orderedSessionIds.some((sessionId) => !sessionIdSet.has(sessionId))) return;
+
+    const reorderedSessions: Session[] = [];
+    for (const [index, sessionId] of orderedSessionIds.entries()) {
+      const session = sessions.find((entry) => entry.id === sessionId);
+      if (session) {
+        reorderedSessions.push({ ...session, sort_order: index });
+      }
+    }
+
+    set({
+      sessions: reorderedSessions,
+      currentSession: currentSession
+        ? reorderedSessions.find((session) => session.id === currentSession.id) ?? null
+        : null,
+    });
+
+    try {
+      await Promise.all(
+        orderedSessionIds.map((sessionId, index) =>
+          db.execute(
+            "UPDATE sessions SET sort_order = ?, updated_at = datetime('now') WHERE id = ? AND workspace_id = ?",
+            [index, sessionId, currentWorkspace.id],
+          ),
+        ),
+      );
+    } catch (error) {
+      console.error("Failed to reorder sessions:", error);
+      await get().loadSessions(currentWorkspace.id);
     }
   },
 

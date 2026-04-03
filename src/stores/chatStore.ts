@@ -65,7 +65,7 @@ interface ChatState {
   setSessionStatus: (sessionId: number, status: SessionStatus) => void;
 
   unreadSessionIds: number[];
-  /** Per-session accumulated unread notifications (e.g. idle pauses / exit). */
+  /** Per-session unread marker. Presence means the session has unseen output. */
   unreadSessionCounts: Record<number, number>;
   markSessionUnread: (sessionId: number) => void;
   clearSessionUnread: (sessionId: number) => void;
@@ -475,13 +475,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   markSessionUnread: (sessionId: number) => {
     set((state) => {
-      const nextCount = (state.unreadSessionCounts[sessionId] ?? 0) + 1;
-      const ids = state.unreadSessionIds.includes(sessionId)
-        ? state.unreadSessionIds
-        : [...state.unreadSessionIds, sessionId];
+      if (state.unreadSessionIds.includes(sessionId)) {
+        return state;
+      }
+
       return {
-        unreadSessionIds: ids,
-        unreadSessionCounts: { ...state.unreadSessionCounts, [sessionId]: nextCount },
+        unreadSessionIds: [...state.unreadSessionIds, sessionId],
+        unreadSessionCounts: { ...state.unreadSessionCounts, [sessionId]: 1 },
       };
     });
   },

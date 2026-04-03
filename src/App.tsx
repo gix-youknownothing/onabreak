@@ -8,6 +8,7 @@ import { useChatStore } from "./stores/chatStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import { initTaskbarBadge } from "./lib/taskbarBadge";
+import { IS_MAC } from "./lib/platform";
 import type { ChatViewHandle } from "./components/ChatView";
 import type { SessionListHandle } from "./components/SessionList";
 
@@ -63,7 +64,13 @@ function App() {
   }, shortcuts, recordingShortcut);
 
   return (
-    <div className="flex flex-col h-screen bg-macos-bg text-macos-text">
+    <div
+      className={`flex flex-col h-screen text-macos-text ${
+        IS_MAC && !isFullscreen
+          ? "overflow-hidden rounded-[20px] border border-white/10 bg-macos-bg shadow-[0_20px_56px_rgba(0,0,0,0.38)]"
+          : "bg-macos-bg"
+      }`}
+    >
       {!isFullscreen && <TitleBar />}
       <div className="flex flex-1 min-h-0">
         {!isFullscreen && (

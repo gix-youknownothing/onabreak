@@ -17,6 +17,10 @@ import {
   getCachedTerminalSession,
   setCachedTerminalSession,
 } from "../lib/terminalSessionCache";
+import {
+  hasConflictingPrimaryShortcutModifier,
+  isPrimaryShortcutModifierPressed,
+} from "../lib/platform";
 import type { SessionProvider } from "../lib/providers";
 
 interface TerminalViewProps {
@@ -208,11 +212,16 @@ export default function TerminalView({
     term.loadAddon(fit);
     term.open(container);
 
-    // Ctrl+C：有选区则复制到剪贴板，否则交给终端发送 \x03（中断）
-    // Ctrl+V：从剪贴板粘贴到 PTY（使用 code 以兼容非美式布局）
+    // Use the platform primary modifier for copy/paste to preserve native behavior.
     term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
       if (event.type !== "keydown") return true;
-      if (!event.ctrlKey || event.altKey || event.metaKey) return true;
+      if (
+        !isPrimaryShortcutModifierPressed(event) ||
+        event.altKey ||
+        hasConflictingPrimaryShortcutModifier(event)
+      ) {
+        return true;
+      }
       if (event.code === "KeyC") {
         if (term.hasSelection()) {
           event.preventDefault();

@@ -1,6 +1,11 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { providerRegistry } from "../lib/providerRegistry";
 import {
+  getPrimaryShortcutModifierLabel,
+  hasConflictingPrimaryShortcutModifier,
+  isPrimaryShortcutModifierPressed,
+} from "../lib/platform";
+import {
   CATEGORY_LABELS,
   type ProviderCategory,
   type SessionProvider,
@@ -458,12 +463,13 @@ function ShortcutsContent() {
 
       // Ignore pure modifier key presses
       if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+      if (hasConflictingPrimaryShortcutModifier(e)) return;
 
       const updated = [...shortcuts];
       updated[recordingIndex] = {
         ...updated[recordingIndex],
         key: e.key,
-        ctrlKey: e.ctrlKey,
+        ctrlKey: isPrimaryShortcutModifierPressed(e),
         altKey: e.altKey,
         shiftKey: e.shiftKey,
       };
@@ -506,7 +512,7 @@ function ShortcutsContent() {
             <div className="flex items-center gap-2">
               {recordingIndex === i ? (
                 <span className="px-3 py-1 text-xs font-mono text-accent-400 bg-accent-100 border border-accent-300/30 rounded-md animate-pulse">
-                  按下新的快捷键...
+                  按下新的快捷键...{getPrimaryShortcutModifierLabel()} 会作为主修饰键
                 </span>
               ) : (
                 <kbd className="px-2.5 py-1 text-xs font-mono text-terminal-300 bg-terminal-800 border border-terminal-600 rounded-md">

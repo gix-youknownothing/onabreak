@@ -1,4 +1,8 @@
 import { useEffect, useRef } from "react";
+import {
+  hasConflictingPrimaryShortcutModifier,
+  isPrimaryShortcutModifierPressed,
+} from "../lib/platform";
 import type { ShortcutConfig } from "../stores/settingsStore";
 
 interface ShortcutActions {
@@ -22,7 +26,8 @@ function isInsideInput(target: EventTarget | null): boolean {
 }
 
 function matchesShortcut(e: KeyboardEvent, s: ShortcutConfig): boolean {
-  if (e.ctrlKey !== s.ctrlKey) return false;
+  if (isPrimaryShortcutModifierPressed(e) !== s.ctrlKey) return false;
+  if (hasConflictingPrimaryShortcutModifier(e)) return false;
   if (e.altKey !== s.altKey) return false;
   if (e.shiftKey !== s.shiftKey) return false;
   // Compare key case-insensitively for letter keys

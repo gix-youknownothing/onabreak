@@ -2,6 +2,7 @@ import { create } from "zustand";
 import Database from "@tauri-apps/plugin-sql";
 import { DEFAULT_PROVIDER_ID } from "../lib/providers";
 import { providerRegistry } from "../lib/providerRegistry";
+import { getPrimaryShortcutModifierLabel } from "../lib/platform";
 import type { SessionProvider } from "../lib/providers";
 
 export interface ShortcutConfig {
@@ -26,7 +27,7 @@ export const DEFAULT_SHORTCUTS: ShortcutConfig[] = [
 
 export function formatShortcut(s: ShortcutConfig): string {
   const parts: string[] = [];
-  if (s.ctrlKey) parts.push("Ctrl");
+  if (s.ctrlKey) parts.push(getPrimaryShortcutModifierLabel());
   if (s.altKey) parts.push("Alt");
   if (s.shiftKey) parts.push("Shift");
   const keyDisplay = s.key.length === 1 ? s.key.toUpperCase() : s.key;

@@ -78,6 +78,38 @@ function isTauriRuntime() {
   );
 }
 
+function filterSessionRecord<T>(
+  record: Record<number, T>,
+  validSessionIds: Set<number>,
+): Record<number, T> {
+  const next: Record<number, T> = {};
+
+  for (const [sessionId, value] of Object.entries(record)) {
+    const numericSessionId = Number(sessionId);
+    if (validSessionIds.has(numericSessionId)) {
+      next[numericSessionId] = value;
+    }
+  }
+
+  return next;
+}
+
+function removeSessionsFromRecords<T>(
+  record: Record<number, T>,
+  removedSessionIds: Set<number>,
+): Record<number, T> {
+  const next: Record<number, T> = {};
+
+  for (const [sessionId, value] of Object.entries(record)) {
+    const numericSessionId = Number(sessionId);
+    if (!removedSessionIds.has(numericSessionId)) {
+      next[numericSessionId] = value;
+    }
+  }
+
+  return next;
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   workspaces: [],
   currentWorkspace: null,
@@ -140,7 +172,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
         wsSessionIds[s.workspace_id].push(s.id);
       }
 
-      set({ workspaces, workspaceSessionIds: wsSessionIds });
+      const validSessionIds = new Set(allSessions.map((session) => session.id));
+
+      set((state) => ({
+        sessions: state.sessions.filter((session) => validSessionIds.has(session.id)),
+        currentSession:
+          state.currentSession && validSessionIds.has(state.currentSession.id)
+            ? state.currentSession
+            : null,
+        workspaces,
+        workspaceSessionIds: wsSessionIds,
+        unreadSessionIds: state.unreadSessionIds.filter((id) => validSessionIds.has(id)),
+        unreadSessionCounts: filterSessionRecord(
+          state.unreadSessionCounts,
+          validSessionIds,
+        ),
+        sessionStatuses: filterSessionRecord(state.sessionStatuses, validSessionIds),
+      }));
     } catch (error) {
       console.error("Failed to load workspaces:", error);
     }
@@ -245,8 +293,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
         disposeTerminalSession(s.id);
       }
 
+      const removedSessionIds = new Set(wsSessions.map((session) => session.id));
+
       await db.execute("DELETE FROM sessions WHERE workspace_id = ?", [id]);
       await db.execute("DELETE FROM workspaces WHERE id = ?", [id]);
+
+      set((state) => ({
+        unreadSessionIds: state.unreadSessionIds.filter(
+          (sessionId) => !removedSessionIds.has(sessionId),
+        ),
+        unreadSessionCounts: removeSessionsFromRecords(
+          state.unreadSessionCounts,
+          removedSessionIds,
+        ),
+        sessionStatuses: removeSessionsFromRecords(
+          state.sessionStatuses,
+          removedSessionIds,
+        ),
+      }));
 
       if (currentWorkspace?.id === id) {
         set({ currentWorkspace: null, currentSession: null, sessions: [] });

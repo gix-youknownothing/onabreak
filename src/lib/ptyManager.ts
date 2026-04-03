@@ -54,10 +54,6 @@ export function notifyPtyData(sessionId: number) {
   if (status === "streaming") {
     resetIdleTimer(sessionId);
   }
-  // Undo unread if new data arrives (agent is still working)
-  if (store.unreadSessionIds.includes(sessionId)) {
-    store.clearSessionUnread(sessionId);
-  }
 }
 
 /**

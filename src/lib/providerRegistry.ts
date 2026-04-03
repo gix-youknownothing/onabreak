@@ -6,9 +6,11 @@ import {
 } from "./providers";
 
 const IS_WINDOWS = navigator.userAgent.includes("Windows");
+const IS_MAC = navigator.platform.includes("Mac");
 
 function getDefaultShell(): string {
   if (IS_WINDOWS) return "powershell.exe";
+  if (IS_MAC) return "/bin/zsh";
   return "/bin/bash";
 }
 
@@ -117,6 +119,9 @@ class ProviderRegistry {
     } else if (IS_WINDOWS) {
       finalArgs = ["/C", file, ...args];
       file = "cmd.exe";
+    } else if (IS_MAC) {
+      // On macOS, spawn the command directly without shell wrapping
+      finalArgs = args;
     }
 
     return { file, args: finalArgs };

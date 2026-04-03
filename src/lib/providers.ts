@@ -125,13 +125,20 @@ export const BUILTIN_PROVIDERS: SessionProvider[] = [
         key: "shell",
         label: "Shell",
         type: "select",
-        options: [
-          { value: "", label: "系统默认" },
-          { value: "powershell", label: "PowerShell" },
-          { value: "cmd", label: "CMD" },
-          { value: "wsl", label: "WSL" },
-          { value: "git-bash", label: "Git Bash" },
-        ],
+        options: navigator.platform.includes("Mac")
+          ? [
+              { value: "", label: "系统默认" },
+              { value: "/bin/zsh", label: "zsh" },
+              { value: "/bin/bash", label: "bash" },
+              { value: "/bin/fish", label: "fish" },
+            ]
+          : [
+              { value: "", label: "系统默认" },
+              { value: "powershell", label: "PowerShell" },
+              { value: "cmd", label: "CMD" },
+              { value: "wsl", label: "WSL" },
+              { value: "git-bash", label: "Git Bash" },
+            ],
       },
     ],
     isBuiltin: true,

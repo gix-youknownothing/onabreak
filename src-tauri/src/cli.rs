@@ -18,14 +18,14 @@ fn is_valid_cli_session_uuid(s: &str) -> bool {
     true
 }
 
-fn work_dir_is_safe(p: &str) -> bool {
+pub(crate) fn work_dir_is_safe(p: &str) -> bool {
     !p.is_empty()
         && !p.contains('\0')
         && !p.contains('\n')
         && !p.contains('\r')
 }
 
-fn normalize_work_dir(work_dir: Option<&String>) -> Result<Option<PathBuf>, String> {
+pub(crate) fn normalize_work_dir(work_dir: Option<&String>) -> Result<Option<PathBuf>, String> {
     match work_dir {
         None => Ok(None),
         Some(s) if s.is_empty() => Ok(None),

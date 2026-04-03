@@ -2,6 +2,7 @@
 
 mod badge;
 mod cli;
+mod workspace;
 
 use tauri::Manager;
 
@@ -45,6 +46,7 @@ fn main() {
             cli::kill_cli_process,
             cli::open_terminal_session,
             badge::set_taskbar_badge,
+            workspace::inspect_workspace,
         ])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();

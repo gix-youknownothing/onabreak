@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod badge;
+mod cli;
+mod workspace;
 
 use tauri::Manager;
 
@@ -40,7 +42,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_pty::init())
-        .invoke_handler(tauri::generate_handler![badge::set_taskbar_badge,])
+        .invoke_handler(tauri::generate_handler![
+            badge::set_taskbar_badge,
+            workspace::inspect_workspace,
+        ])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
             window.set_title("onabreak - AI Agent Chat").ok();

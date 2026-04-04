@@ -25,17 +25,6 @@ class ProviderRegistry {
     }
   }
 
-  registerCustom(provider: SessionProvider) {
-    this.providers.set(provider.id, provider);
-  }
-
-  unregister(id: string) {
-    const p = this.providers.get(id);
-    if (p && !p.isBuiltin) {
-      this.providers.delete(id);
-    }
-  }
-
   get(id: string): SessionProvider | undefined {
     return this.providers.get(id);
   }
@@ -53,7 +42,7 @@ class ProviderRegistry {
   }
 
   setDefaultProviderId(id: string) {
-    this._defaultProviderId = id;
+    this._defaultProviderId = this.providers.has(id) ? id : DEFAULT_PROVIDER_ID;
   }
 
   getDefaultProviderId(): string {
@@ -67,7 +56,7 @@ class ProviderRegistry {
   }
 
   setQuickProviderIds(ids: string[]) {
-    this._quickProviderIds = ids;
+    this._quickProviderIds = ids.filter((id) => this.providers.has(id));
   }
 
   getQuickProviderIds(): string[] {
@@ -78,8 +67,6 @@ class ProviderRegistry {
     provider: SessionProvider,
     opts: {
       sessionConfig: Record<string, any>;
-      cliSessionId?: string;
-      isResume?: boolean;
     },
   ): { file: string; args: string[] } {
     const args: string[] = [...(provider.fixedArgs || [])];
@@ -93,12 +80,6 @@ class ProviderRegistry {
       } else if (param.argTemplate && typeof value === "string" && value) {
         args.push(...expandArgTemplate(param.argTemplate, value));
       }
-    }
-
-    if (provider.sessionManagement && opts.cliSessionId) {
-      const sm = provider.sessionManagement;
-      const arg = opts.isResume ? sm.resumeArg : sm.newSessionArg;
-      args.push(arg, opts.cliSessionId);
     }
 
     let file = provider.command;

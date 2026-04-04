@@ -7,14 +7,12 @@ interface SessionViewProps {
   session: Session;
   workspace: Workspace;
   onPtyExit: (sessionId: number, exitCode: number) => void;
-  onCliSessionCreated: (sessionId: number, uuid: string) => void;
 }
 
 export default function SessionView({
   session,
   workspace,
   onPtyExit,
-  onCliSessionCreated,
 }: SessionViewProps) {
   const provider = useMemo(
     () => providerRegistry.get(session.provider_id) ?? providerRegistry.getDefault(),
@@ -34,11 +32,6 @@ export default function SessionView({
     [onPtyExit],
   );
 
-  const handleCliSessionCreated = useCallback(
-    (sid: number, uuid: string) => onCliSessionCreated(sid, uuid),
-    [onCliSessionCreated],
-  );
-
   switch (provider.viewType) {
     case "terminal":
       return (
@@ -47,10 +40,8 @@ export default function SessionView({
           sessionId={session.id}
           provider={provider}
           sessionConfig={sessionConfig}
-          cliSessionId={session.cli_session_id}
           workDir={workspace.work_dir}
           onPtyExit={handlePtyExit}
-          onCliSessionCreated={handleCliSessionCreated}
         />
       );
     case "webview":
@@ -72,10 +63,8 @@ export default function SessionView({
           sessionId={session.id}
           provider={provider}
           sessionConfig={sessionConfig}
-          cliSessionId={session.cli_session_id}
           workDir={workspace.work_dir}
           onPtyExit={handlePtyExit}
-          onCliSessionCreated={handleCliSessionCreated}
         />
       );
   }

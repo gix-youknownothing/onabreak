@@ -17,7 +17,6 @@ import { providerRegistry } from "../lib/providerRegistry";
 import SessionView from "./SessionView";
 import ProviderIcon from "./ProviderIcon";
 import { ProviderPickerPortal } from "./ProviderPicker";
-import WorkspaceNotesView from "./WorkspaceNotesView";
 
 function TabSessionIndicators({
   status,
@@ -209,84 +208,26 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
     createSession(`Session ${nextNum}`, defaultProvider.id);
   }, [currentWorkspace, sessions.length, createSession]);
 
-  const handleNotesClick = useCallback(async () => {
-    useChatStore.setState({ currentSession: null });
-    const { db, currentWorkspace } = useChatStore.getState();
-    if (db && currentWorkspace) {
-      await db.execute(
-        "UPDATE workspaces SET last_active_session_id = NULL WHERE id = ?",
-        [currentWorkspace.id],
-      );
-      useChatStore.setState((state) => ({
-        currentWorkspace: state.currentWorkspace
-          ? { ...state.currentWorkspace, last_active_session_id: null }
-          : null,
-        workspaces: state.workspaces.map((ws) =>
-          ws.id === currentWorkspace.id
-            ? { ...ws, last_active_session_id: null }
-            : ws,
-        ),
-      }));
-    }
-  }, []);
-
-  const isNotesActive = currentSession === null;
-
   useImperativeHandle(ref, () => ({
     cycleTab(direction: 1 | -1) {
-      const totalTabs = sessions.length + 1;
+      const totalTabs = sessions.length;
       if (totalTabs <= 1) return;
-      let currentIdx = 0;
-      if (currentSession) {
-        const sIdx = sessions.findIndex((s) => s.id === currentSession.id);
-        currentIdx = sIdx === -1 ? 0 : sIdx + 1;
-      }
+      const sIdx = currentSession ? sessions.findIndex((s) => s.id === currentSession.id) : 0;
+      const currentIdx = sIdx === -1 ? 0 : sIdx;
       const next = (currentIdx + direction + totalTabs) % totalTabs;
-      if (next === 0) {
-        handleNotesClick();
-      } else {
-        selectSession(sessions[next - 1]);
-      }
+      selectSession(sessions[next]);
     },
     jumpToTab(index: number) {
-      if (index === 0) {
-        handleNotesClick();
-      } else if (index >= 1 && index <= sessions.length) {
-        selectSession(sessions[index - 1]);
+      if (index >= 0 && index < sessions.length) {
+        selectSession(sessions[index]);
       }
     },
     createSession() {
       handleCreateSessionWithDefault();
     },
-  }), [sessions, currentSession, selectSession, handleCreateSessionWithDefault, handleNotesClick]);
+  }), [sessions, currentSession, selectSession, handleCreateSessionWithDefault]);
 
   const handlePtyExit = useCallback((_sessionId: number, _exitCode: number) => {}, []);
-
-  const handleCliSessionCreated = useCallback(
-    async (sessionId: number, uuid: string) => {
-      const { db, currentSession: cs, sessions: allSessions } = useChatStore.getState();
-      if (!db) return;
-      try {
-        await db.execute(
-          "UPDATE sessions SET cli_session_id = ? WHERE id = ?",
-          [uuid, sessionId],
-        );
-        if (cs?.id === sessionId) {
-          useChatStore.setState({
-            currentSession: { ...cs, cli_session_id: uuid },
-          });
-        }
-        useChatStore.setState({
-          sessions: allSessions.map((s) =>
-            s.id === sessionId ? { ...s, cli_session_id: uuid } : s,
-          ),
-        });
-      } catch (e) {
-        console.error("Failed to save cli_session_id:", e);
-      }
-    },
-    [],
-  );
 
   const handleCreateSessionWithProvider = useCallback(
     (providerId: string) => {
@@ -371,19 +312,6 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
       <div className="h-11 border-b border-macos-border bg-macos-sidebar/80 backdrop-blur-[40px] px-3 flex items-center gap-2 flex-shrink-0">
         <div className="flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto overflow-y-hidden">
-          <div
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-lg cursor-pointer transition-all whitespace-nowrap flex-shrink-0 ${
-              isNotesActive
-                ? "bg-macos-card text-macos-text shadow-macos-sm"
-                : "text-macos-tertiary hover:text-macos-secondary hover:bg-macos-card/50"
-            }`}
-            onClick={handleNotesClick}
-          >
-            <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h8" />
-            </svg>
-            <span>笔记</span>
-          </div>
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -488,15 +416,12 @@ const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({ o
       </div>
 
       <div className="flex-1 flex flex-col min-h-0">
-      {isNotesActive ? (
-        <WorkspaceNotesView workspace={currentWorkspace} />
-      ) : currentSession ? (
+      {currentSession ? (
         <div className="flex-1 flex flex-col min-h-0">
           <SessionView
             session={currentSession}
             workspace={currentWorkspace}
             onPtyExit={handlePtyExit}
-            onCliSessionCreated={handleCliSessionCreated}
           />
         </div>
       ) : null}

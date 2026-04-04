@@ -10,12 +10,6 @@ export interface ProviderParam {
   argTemplate?: string;
 }
 
-export interface SessionManagement {
-  newSessionArg: string;
-  resumeArg: string;
-  stalePatterns: string[];
-}
-
 export interface SessionProvider {
   id: string;
   name: string;
@@ -25,8 +19,6 @@ export interface SessionProvider {
   command: string;
   fixedArgs?: string[];
   params: ProviderParam[];
-  sessionManagement?: SessionManagement;
-  isBuiltin: boolean;
   description?: string;
 }
 
@@ -57,12 +49,6 @@ export const BUILTIN_PROVIDERS: SessionProvider[] = [
         argTemplate: "--dangerously-skip-permissions",
       },
     ],
-    sessionManagement: {
-      newSessionArg: "--session-id",
-      resumeArg: "--resume",
-      stalePatterns: ["No conversation found", "Invalid session"],
-    },
-    isBuiltin: true,
     description: "Anthropic Claude Code CLI",
   },
   {
@@ -92,7 +78,6 @@ export const BUILTIN_PROVIDERS: SessionProvider[] = [
         argTemplate: "--approval-mode {value}",
       },
     ],
-    isBuiltin: true,
     description: "OpenAI Codex CLI",
   },
   {
@@ -110,7 +95,6 @@ export const BUILTIN_PROVIDERS: SessionProvider[] = [
         argTemplate: "--model {value}",
       },
     ],
-    isBuiltin: true,
     description: "Cursor Agent CLI",
   },
   {
@@ -141,7 +125,6 @@ export const BUILTIN_PROVIDERS: SessionProvider[] = [
             ],
       },
     ],
-    isBuiltin: true,
     description: "Native system terminal",
   },
 ];

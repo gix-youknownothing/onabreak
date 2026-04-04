@@ -1,7 +1,12 @@
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 
-const terminalCache = new Map<number, { term: Terminal; fit: FitAddon }>();
+export interface CachedTerminalSession {
+  term: Terminal;
+  fit: FitAddon;
+}
+
+const terminalCache = new Map<number, CachedTerminalSession>();
 
 export function getCachedTerminalSession(sessionId: number) {
   return terminalCache.get(sessionId);
@@ -9,7 +14,7 @@ export function getCachedTerminalSession(sessionId: number) {
 
 export function setCachedTerminalSession(
   sessionId: number,
-  ts: { term: Terminal; fit: FitAddon },
+  ts: CachedTerminalSession,
 ) {
   terminalCache.set(sessionId, ts);
 }

@@ -11,7 +11,6 @@ export interface Workspace {
   is_pinned: number;
   sort_order: number | null;
   is_completed: number;
-  notes: string;
   last_active_session_id: number | null;
 }
 
@@ -21,7 +20,6 @@ export interface Session {
   name: string;
   provider_id: string;
   provider_config: string;
-  cli_session_id: string | null;
   sort_order: number | null;
   created_at: string;
   updated_at: string;
@@ -44,6 +42,7 @@ interface ChatState {
   sessionStatuses: Record<number, SessionStatus>;
 
   initDatabase: () => Promise<void>;
+  clearPersistedSessionsOnLaunch: () => Promise<void>;
 
   loadWorkspaces: () => Promise<void>;
   createWorkspace: (name: string, workDir: string) => Promise<void>;
@@ -58,9 +57,6 @@ interface ChatState {
   deleteSession: (sessionId: number) => Promise<void>;
   renameSession: (sessionId: number, newName: string) => Promise<void>;
   reorderSessions: (orderedSessionIds: number[]) => Promise<void>;
-  clearCliSession: (sessionId: number) => Promise<void>;
-
-  updateWorkspaceNotes: (id: number, notes: string) => Promise<void>;
 
   setSessionStatus: (sessionId: number, status: SessionStatus) => void;
 
@@ -110,6 +106,54 @@ function removeSessionsFromRecords<T>(
   return next;
 }
 
+function resolveCurrentSession(
+  currentSession: Session | null,
+  sessions: Session[],
+): Session | null {
+  if (!currentSession) return null;
+  return sessions.find((session) => session.id === currentSession.id) ?? null;
+}
+
+function filterSessionsForWorkspace(
+  sessions: Session[],
+  workspaceId: number | null,
+): Session[] {
+  if (workspaceId === null) return [];
+  return sessions.filter((session) => session.workspace_id === workspaceId);
+}
+
+async function querySessionsForWorkspace(
+  db: Database,
+  workspaceId: number,
+): Promise<Session[]> {
+  return db.select<Session[]>(
+    `SELECT id, workspace_id, name, type, agent, provider_id, provider_config, sort_order, created_at, updated_at
+     FROM sessions
+     WHERE workspace_id = ?
+     ORDER BY sort_order IS NULL ASC, sort_order ASC, created_at ASC`,
+    [workspaceId],
+  );
+}
+
+async function createDefaultSessionForWorkspace(
+  db: Database,
+  workspaceId: number,
+  sortOrder: number,
+): Promise<number> {
+  const { providerRegistry } = await import("../lib/providerRegistry");
+  const defaultProvider = providerRegistry.getDefault();
+  const result = await db.execute(
+    "INSERT INTO sessions (workspace_id, name, type, agent, provider_id, provider_config, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [workspaceId, "Session 1", "terminal", defaultProvider.id, defaultProvider.id, "{}", sortOrder],
+  );
+
+  if (typeof result.lastInsertId !== "number") {
+    throw new Error("Failed to create default session");
+  }
+
+  return result.lastInsertId;
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   workspaces: [],
   currentWorkspace: null,
@@ -149,6 +193,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  clearPersistedSessionsOnLaunch: async () => {
+    const { db } = get();
+    if (!db) return;
+
+    try {
+      await db.execute("DELETE FROM sessions");
+      await db.execute("UPDATE workspaces SET last_active_session_id = NULL");
+
+      set((state) => ({
+        sessions: [],
+        currentSession: null,
+        workspaceSessionIds: Object.fromEntries(
+          state.workspaces.map((workspace) => [workspace.id, []]),
+        ),
+        workspaces: state.workspaces.map((workspace) => ({
+          ...workspace,
+          last_active_session_id: null,
+        })),
+        currentWorkspace: state.currentWorkspace
+          ? { ...state.currentWorkspace, last_active_session_id: null }
+          : null,
+        unreadSessionIds: [],
+        unreadSessionCounts: {},
+        sessionStatuses: {},
+      }));
+    } catch (error) {
+      console.error("Failed to clear persisted sessions on launch:", error);
+    }
+  },
+
   // ─── Workspace CRUD ───
 
   loadWorkspaces: async () => {
@@ -157,7 +231,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       const workspaces = await db.select<Workspace[]>(
-        `SELECT id, name, work_dir, created_at, updated_at, is_pinned, sort_order, is_completed, COALESCE(notes, '') as notes, last_active_session_id
+        `SELECT id, name, work_dir, created_at, updated_at, is_pinned, sort_order, is_completed, last_active_session_id
          FROM workspaces
          ORDER BY is_pinned DESC, sort_order ASC NULLS LAST, updated_at DESC`,
       );
@@ -173,13 +247,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       const validSessionIds = new Set(allSessions.map((session) => session.id));
+      const currentWorkspaceId = get().currentWorkspace?.id ?? null;
+      const currentWorkspaceSessions = filterSessionsForWorkspace(
+        get().sessions.filter((session) => validSessionIds.has(session.id)),
+        currentWorkspaceId,
+      );
 
       set((state) => ({
-        sessions: state.sessions.filter((session) => validSessionIds.has(session.id)),
-        currentSession:
-          state.currentSession && validSessionIds.has(state.currentSession.id)
-            ? state.currentSession
-            : null,
+        currentWorkspace: state.currentWorkspace
+          ? workspaces.find((workspace) => workspace.id === state.currentWorkspace?.id) ?? null
+          : null,
+        sessions: currentWorkspaceSessions,
+        currentSession: resolveCurrentSession(
+          state.currentSession &&
+            validSessionIds.has(state.currentSession.id) &&
+            (!state.currentWorkspace || state.currentSession.workspace_id === state.currentWorkspace.id)
+              ? state.currentSession
+              : null,
+          currentWorkspaceSessions,
+        ) ?? currentWorkspaceSessions[0] ?? null,
         workspaces,
         workspaceSessionIds: wsSessionIds,
         unreadSessionIds: state.unreadSessionIds.filter((id) => validSessionIds.has(id)),
@@ -224,35 +310,94 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectWorkspace: async (ws: Workspace) => {
+    const previousState = {
+      currentWorkspace: get().currentWorkspace,
+      currentSession: get().currentSession,
+      sessions: get().sessions,
+    };
+    const previousWorkspaceId = get().currentWorkspace?.id ?? null;
+    const isWorkspaceSwitch = previousWorkspaceId !== ws.id;
+
     set((state) => ({
       currentWorkspace: { ...ws, is_completed: 0 },
       workspaces: state.workspaces.map((w) =>
         w.id === ws.id ? { ...w, is_completed: 0 } : w,
       ),
+      ...(isWorkspaceSwitch
+        ? {
+            currentSession: null,
+          }
+        : {}),
     }));
 
     const { db } = get();
     if (db) {
-      await db.execute("UPDATE workspaces SET is_completed = 0 WHERE id = ?", [ws.id]);
+      try {
+        await db.execute("UPDATE workspaces SET is_completed = 0 WHERE id = ?", [ws.id]);
+      } catch (error) {
+        console.error("Failed to mark workspace active:", error);
+      }
     }
 
-    await get().loadSessions(ws.id);
+    try {
+      const sessions = db ? await querySessionsForWorkspace(db, ws.id) : [];
 
-    // Restore last active session if it still exists
-    const sessions = get().sessions;
-    const lastActiveId = ws.last_active_session_id;
-    const lastSession = lastActiveId ? sessions.find((s) => s.id === lastActiveId) : null;
-    set({ currentSession: lastSession ?? null });
+      if (get().currentWorkspace?.id !== ws.id) {
+        return;
+      }
 
-    // Clear unread for the auto-selected session
-    if (lastSession) {
+      if (db && sessions.length === 0) {
+        await createDefaultSessionForWorkspace(db, ws.id, 0);
+        const refreshedSessions = await querySessionsForWorkspace(db, ws.id);
+
+        if (get().currentWorkspace?.id !== ws.id) {
+          return;
+        }
+
+        set({
+          sessions: refreshedSessions,
+          currentSession: refreshedSessions[0] ?? null,
+        });
+        await get().loadWorkspaces();
+        return;
+      }
+
+      const lastActiveId = ws.last_active_session_id;
+      const selectedSession =
+        (lastActiveId ? sessions.find((s) => s.id === lastActiveId) : null) ?? sessions[0] ?? null;
+
       set((state) => {
-        const { [lastSession.id]: _c, ...restCounts } = state.unreadSessionCounts;
+        const { [selectedSession?.id ?? -1]: _c, ...restCounts } = state.unreadSessionCounts;
         return {
-          unreadSessionIds: state.unreadSessionIds.filter((id) => id !== lastSession.id),
-          unreadSessionCounts: restCounts,
+          sessions,
+          currentSession: selectedSession,
+          unreadSessionIds: selectedSession
+            ? state.unreadSessionIds.filter((id) => id !== selectedSession.id)
+            : state.unreadSessionIds,
+          unreadSessionCounts: selectedSession ? restCounts : state.unreadSessionCounts,
         };
       });
+
+      if (db && selectedSession && selectedSession.id !== lastActiveId) {
+        await db.execute(
+          "UPDATE workspaces SET last_active_session_id = ? WHERE id = ?",
+          [selectedSession.id, ws.id],
+        );
+        set((state) => ({
+          currentWorkspace:
+            state.currentWorkspace?.id === ws.id
+              ? { ...state.currentWorkspace, last_active_session_id: selectedSession.id }
+              : state.currentWorkspace,
+          workspaces: state.workspaces.map((workspace) =>
+            workspace.id === ws.id
+              ? { ...workspace, last_active_session_id: selectedSession.id }
+              : workspace,
+          ),
+        }));
+      }
+    } catch (error) {
+      console.error("Failed to select workspace:", error);
+      set(previousState);
     }
   },
 
@@ -344,14 +489,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!db) return;
 
     try {
-      const sessions = await db.select<Session[]>(
-        `SELECT id, workspace_id, name, type, agent, provider_id, provider_config, cli_session_id, sort_order, created_at, updated_at
-         FROM sessions
-         WHERE workspace_id = ?
-         ORDER BY sort_order IS NULL ASC, sort_order ASC, created_at ASC`,
-        [workspaceId],
-      );
-      set({ sessions });
+      const sessions = await querySessionsForWorkspace(db, workspaceId);
+      set((state) => {
+        if (state.currentWorkspace?.id !== workspaceId) {
+          return {};
+        }
+
+        return {
+          sessions,
+          currentSession: resolveCurrentSession(state.currentSession, sessions) ?? sessions[0] ?? null,
+        };
+      });
     } catch (error) {
       console.error("Failed to load sessions:", error);
     }
@@ -360,6 +508,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   createSession: async (name: string, providerId: string, providerConfig?: Record<string, any>) => {
     const { db, currentWorkspace, sessions } = get();
     if (!db || !currentWorkspace) return;
+    const workspaceId = currentWorkspace.id;
 
     try {
       const configJson = JSON.stringify(providerConfig || {});
@@ -369,11 +518,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }, -1) + 1;
       const result = await db.execute(
         "INSERT INTO sessions (workspace_id, name, type, agent, provider_id, provider_config, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [currentWorkspace.id, name, "terminal", providerId, providerId, configJson, nextSortOrder],
+        [workspaceId, name, "terminal", providerId, providerId, configJson, nextSortOrder],
       );
 
-      await get().loadSessions(currentWorkspace.id);
+      await get().loadSessions(workspaceId);
       await get().loadWorkspaces();
+
+      if (get().currentWorkspace?.id !== workspaceId) {
+        return;
+      }
 
       const newSession = get().sessions.find((s) => s.id === result.lastInsertId);
       if (newSession) {
@@ -385,6 +538,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectSession: async (session: Session) => {
+    const { currentWorkspace: activeWorkspace } = get();
+    if (activeWorkspace && session.workspace_id !== activeWorkspace.id) {
+      return;
+    }
+    const workspaceId = session.workspace_id;
+
     set((state) => {
       const { [session.id]: _c, ...restCounts } = state.unreadSessionCounts;
       return {
@@ -393,18 +552,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
         unreadSessionCounts: restCounts,
       };
     });
-    const { db, currentWorkspace } = get();
-    if (db && currentWorkspace) {
+    const { db } = get();
+    if (db) {
       await db.execute(
         "UPDATE workspaces SET last_active_session_id = ? WHERE id = ?",
-        [session.id, currentWorkspace.id],
+        [session.id, workspaceId],
       );
       set((state) => ({
-        currentWorkspace: state.currentWorkspace
-          ? { ...state.currentWorkspace, last_active_session_id: session.id }
-          : null,
+        currentWorkspace:
+          state.currentWorkspace?.id === workspaceId
+            ? { ...state.currentWorkspace, last_active_session_id: session.id }
+            : state.currentWorkspace,
         workspaces: state.workspaces.map((ws) =>
-          ws.id === currentWorkspace.id
+          ws.id === workspaceId
             ? { ...ws, last_active_session_id: session.id }
             : ws,
         ),
@@ -415,6 +575,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   deleteSession: async (sessionId: number) => {
     const { db, currentSession, currentWorkspace } = get();
     if (!db || !currentWorkspace) return;
+    const workspaceId = currentWorkspace.id;
 
     try {
       const [{ killPtySession }, { disposeTerminalSession }] = await Promise.all([
@@ -439,8 +600,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         };
       });
 
-      await get().loadSessions(currentWorkspace.id);
+      await get().loadSessions(workspaceId);
       await get().loadWorkspaces();
+
+      if (get().currentWorkspace?.id !== workspaceId) {
+        return;
+      }
 
       if (wasActive) {
         const sessions = get().sessions;
@@ -454,6 +619,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   renameSession: async (sessionId: number, newName: string) => {
     const { db, currentSession, currentWorkspace } = get();
     if (!db || !newName.trim()) return;
+    const workspaceId = currentWorkspace?.id ?? null;
 
     try {
       await db.execute(
@@ -463,8 +629,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (currentSession?.id === sessionId) {
         set({ currentSession: { ...currentSession, name: newName.trim() } });
       }
-      if (currentWorkspace) {
-        await get().loadSessions(currentWorkspace.id);
+      if (workspaceId !== null) {
+        await get().loadSessions(workspaceId);
       }
     } catch (error) {
       console.error("Failed to rename session:", error);
@@ -474,6 +640,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   reorderSessions: async (orderedSessionIds: number[]) => {
     const { db, currentWorkspace, sessions, currentSession } = get();
     if (!db || !currentWorkspace || orderedSessionIds.length !== sessions.length) return;
+    const workspaceId = currentWorkspace.id;
 
     const sessionIdSet = new Set(sessions.map((session) => session.id));
     if (orderedSessionIds.some((sessionId) => !sessionIdSet.has(sessionId))) return;
@@ -498,57 +665,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         orderedSessionIds.map((sessionId, index) =>
           db.execute(
             "UPDATE sessions SET sort_order = ?, updated_at = datetime('now') WHERE id = ? AND workspace_id = ?",
-            [index, sessionId, currentWorkspace.id],
+            [index, sessionId, workspaceId],
           ),
         ),
       );
     } catch (error) {
       console.error("Failed to reorder sessions:", error);
-      await get().loadSessions(currentWorkspace.id);
-    }
-  },
-
-  clearCliSession: async (sessionId: number) => {
-    const { db, currentSession } = get();
-    if (!db) return;
-
-    try {
-      await db.execute(
-        "UPDATE sessions SET cli_session_id = NULL, updated_at = datetime('now') WHERE id = ?",
-        [sessionId],
-      );
-      if (currentSession?.id === sessionId) {
-        set({ currentSession: { ...currentSession, cli_session_id: null } });
-      }
-      set({
-        sessions: get().sessions.map((s) =>
-          s.id === sessionId ? { ...s, cli_session_id: null } : s,
-        ),
-      });
-    } catch (error) {
-      console.error("Failed to clear CLI session:", error);
-    }
-  },
-
-  updateWorkspaceNotes: async (id: number, notes: string) => {
-    const { db, currentWorkspace } = get();
-    if (!db) return;
-
-    try {
-      await db.execute(
-        "UPDATE workspaces SET notes = ?, updated_at = datetime('now') WHERE id = ?",
-        [notes, id],
-      );
-      if (currentWorkspace?.id === id) {
-        set({ currentWorkspace: { ...currentWorkspace, notes } });
-      }
-      set((state) => ({
-        workspaces: state.workspaces.map((ws) =>
-          ws.id === id ? { ...ws, notes } : ws,
-        ),
-      }));
-    } catch (error) {
-      console.error("Failed to update workspace notes:", error);
+      await get().loadSessions(workspaceId);
     }
   },
 

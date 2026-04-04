@@ -13,7 +13,16 @@ import type { ChatViewHandle } from "./components/ChatView";
 import type { SessionListHandle } from "./components/SessionList";
 
 function App() {
-  const { initDatabase, loadWorkspaces, currentWorkspace, workspaces, selectWorkspace, db, dbStatus } = useChatStore();
+  const {
+    initDatabase,
+    clearPersistedSessionsOnLaunch,
+    loadWorkspaces,
+    currentWorkspace,
+    workspaces,
+    selectWorkspace,
+    db,
+    dbStatus,
+  } = useChatStore();
   const { initSettings, initialized: settingsReady, shortcuts, recordingShortcut } = useSettingsStore();
   const [isFullscreen, _setIsFullscreen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -23,11 +32,17 @@ function App() {
   const sessionListRef = useRef<SessionListHandle>(null);
 
   useEffect(() => {
-    initDatabase().then(() => {
-      loadWorkspaces();
+    initDatabase().then(async () => {
+      await clearPersistedSessionsOnLaunch();
+      await loadWorkspaces();
+
+      const { currentWorkspace: activeWorkspace, workspaces: loadedWorkspaces } = useChatStore.getState();
+      if (!activeWorkspace && loadedWorkspaces.length > 0) {
+        await selectWorkspace(loadedWorkspaces[0]);
+      }
     });
     initTaskbarBadge();
-  }, [initDatabase, loadWorkspaces]);
+  }, [clearPersistedSessionsOnLaunch, initDatabase, loadWorkspaces, selectWorkspace]);
 
   useEffect(() => {
     if (db && !settingsReady) {

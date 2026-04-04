@@ -43,8 +43,6 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_pty::init())
         .invoke_handler(tauri::generate_handler![
-            cli::kill_cli_process,
-            cli::open_terminal_session,
             badge::set_taskbar_badge,
             workspace::inspect_workspace,
         ])

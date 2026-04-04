@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -6,8 +6,6 @@ import {
   spawnPty,
   writeToPty,
   resizePty,
-  killPtySession,
-  generateUUID,
   notifyPtyData,
   notifyPtyExit,
   notifyUserInput,
@@ -27,10 +25,8 @@ interface TerminalViewProps {
   sessionId: number;
   provider: SessionProvider;
   sessionConfig: Record<string, any>;
-  cliSessionId: string | null;
   workDir: string;
   onPtyExit: (sessionId: number, exitCode: number) => void;
-  onCliSessionCreated: (sessionId: number, uuid: string) => void;
 }
 
 interface TerminalSession {
@@ -42,10 +38,8 @@ export default function TerminalView({
   sessionId,
   provider,
   sessionConfig,
-  cliSessionId,
   workDir,
   onPtyExit,
-  onCliSessionCreated,
 }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const initRef = useRef(false);
@@ -54,23 +48,15 @@ export default function TerminalView({
   const [logsExpanded, setLogsExpanded] = useState(false);
   const [logCount, setLogCount] = useState(0);
 
-  const hasSessionMgmt = !!provider.sessionManagement;
-
-  // Helper: write an [onabreak] log line — stored in ref, not written to terminal
   const addLog = useCallback((msg: string) => {
     logsRef.current = [...logsRef.current, msg];
     setLogCount(logsRef.current.length);
   }, []);
 
   const doSpawnProcess = useCallback(
-    (term: Terminal, fit: FitAddon, uuid: string | null, isResume: boolean) => {
-      const command = providerRegistry.buildSpawnArgs(provider, {
-        sessionConfig,
-        cliSessionId: uuid || undefined,
-        isResume,
-      });
-
-      const label = `${command.file} ${command.args.join(" ")}`;
+    (term: Terminal) => {
+      const command = providerRegistry.buildSpawnArgs(provider, { sessionConfig });
+      const label = `${command.file} ${command.args.join(" ")}`.trim();
       addLog(`Spawning: ${label}`);
 
       let pty;
@@ -86,7 +72,7 @@ export default function TerminalView({
         return;
       }
 
-      const ptyAny = pty as any;
+      const ptyAny = pty as { _init?: Promise<unknown>; pid?: number };
       if (ptyAny._init && typeof ptyAny._init.then === "function") {
         ptyAny._init
           .then(() => {
@@ -101,65 +87,34 @@ export default function TerminalView({
           });
       }
 
-      const decoder = new TextDecoder();
-      let earlyOutput = "";
-      let recovering = false;
-      let gotFirstData = false;
-
       pty.onData((rawData: unknown) => {
         notifyPtyData(sessionId);
 
-        if (!gotFirstData) {
-          gotFirstData = true;
-          addLog(`Receiving data (type: ${typeof rawData}, isArray: ${Array.isArray(rawData)}, isUint8: ${rawData instanceof Uint8Array})`);
-        }
-
-        let bytes: Uint8Array;
-        if (rawData instanceof Uint8Array) {
-          bytes = rawData;
-        } else if (Array.isArray(rawData)) {
-          bytes = new Uint8Array(rawData);
-        } else if (typeof rawData === "string") {
+        if (typeof rawData === "string") {
           term.write(rawData);
-          earlyOutput += rawData;
-          checkStaleSession();
-          return;
-        } else {
-          term.write(String(rawData));
           return;
         }
 
-        const text = decoder.decode(bytes);
-        term.write(bytes);
+        if (rawData instanceof Uint8Array) {
+          term.write(rawData);
+          return;
+        }
 
-        earlyOutput += text;
-        checkStaleSession();
+        if (Array.isArray(rawData)) {
+          term.write(new Uint8Array(rawData));
+          return;
+        }
+
+        term.write(String(rawData));
       });
 
-      function checkStaleSession() {
-        if (recovering || !hasSessionMgmt || !isResume) return;
-        if (earlyOutput.length > 4000) return;
-
-        const patterns = provider.sessionManagement!.stalePatterns;
-        const isStale = patterns.some((p) => earlyOutput.includes(p));
-        if (!isStale) return;
-
-        recovering = true;
-        addLog("Stale session detected, restarting with new session...");
-        killPtySession(sessionId);
-        const newUuid = generateUUID();
-        onCliSessionCreated(sessionId, newUuid);
-        setTimeout(() => doSpawnProcess(term, fit, newUuid, false), 300);
-      }
-
       pty.onExit(({ exitCode }) => {
-        if (recovering) return;
         addLog(`Process exited (code ${exitCode})`);
         notifyPtyExit(sessionId);
         onPtyExit(sessionId, exitCode);
       });
     },
-    [sessionId, workDir, provider, sessionConfig, hasSessionMgmt, onPtyExit, onCliSessionCreated, addLog],
+    [addLog, onPtyExit, provider, sessionConfig, sessionId, workDir],
   );
 
   useEffect(() => {
@@ -212,7 +167,6 @@ export default function TerminalView({
     term.loadAddon(fit);
     term.open(container);
 
-    // Use the platform primary modifier for copy/paste to preserve native behavior.
     term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
       if (event.type !== "keydown") return true;
       if (
@@ -251,18 +205,7 @@ export default function TerminalView({
       setCachedTerminalSession(sessionId, ts);
       termSessionRef.current = ts;
 
-      let uuid: string | null = null;
-      let isResume = false;
-
-      if (hasSessionMgmt) {
-        uuid = cliSessionId || generateUUID();
-        isResume = !!cliSessionId;
-        if (!cliSessionId) {
-          onCliSessionCreated(sessionId, uuid);
-        }
-      }
-
-      doSpawnProcess(term, fit, uuid, isResume);
+      doSpawnProcess(term);
 
       term.onData((data: string) => {
         writeToPty(sessionId, data);
@@ -271,7 +214,7 @@ export default function TerminalView({
         }
       });
     });
-  }, [sessionId, cliSessionId, hasSessionMgmt, doSpawnProcess, onCliSessionCreated, addLog]);
+  }, [addLog, doSpawnProcess, sessionId]);
 
   useEffect(() => {
     const observer = new ResizeObserver(() => {
@@ -288,11 +231,10 @@ export default function TerminalView({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col relative min-w-0" style={{ backgroundColor: "#1C1917" }}>
-      {/* Collapsible log bar */}
       {logCount > 0 && (
         <div className="flex-shrink-0" style={{ backgroundColor: "#1C1917" }}>
           <button
-            onClick={() => setLogsExpanded((v) => !v)}
+            onClick={() => setLogsExpanded((value) => !value)}
             className="w-full flex items-center gap-1.5 px-3 py-1 text-[11px] text-stone-500 hover:text-stone-400 transition-colors"
             style={{ backgroundColor: "#1C1917" }}
           >
@@ -311,8 +253,8 @@ export default function TerminalView({
               className="px-3 pb-2 text-[11px] font-mono text-stone-500 space-y-0.5 max-h-40 overflow-y-auto"
               style={{ backgroundColor: "#292524" }}
             >
-              {logsRef.current.map((log, i) => (
-                <div key={i} className="flex gap-1.5">
+              {logsRef.current.map((log, index) => (
+                <div key={index} className="flex gap-1.5">
                   <span className="text-stone-600 flex-shrink-0">›</span>
                   <span className="break-all">{log}</span>
                 </div>
@@ -321,7 +263,6 @@ export default function TerminalView({
           )}
         </div>
       )}
-      {/* Terminal — 顶边略留空，左右贴边避免露出主区域背景 */}
       <div
         className="flex-1 min-h-0 flex flex-col pt-3"
         style={{ backgroundColor: "#1C1917" }}
